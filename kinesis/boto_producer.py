@@ -123,14 +123,11 @@ class KinesisStream:
             response = self.kinesis_client.put_record(
                 StreamName=self.name, Data=json.dumps(data), PartitionKey=partition_key
             )
-            print("shard:", response["ShardId"])
-            print("Put record in stream {}".format(self.name))
-
+            logger.debug("Put record in stream %s, shard: %s", self.name, response["ShardId"])
+            return response
         except ClientError:
             logger.exception("Couldn't put record in stream %s.", self.name)
             raise
-        else:
-            return response
 
     # snippet-end:[python.example_code.kinesis.PutRecord]
 
@@ -171,32 +168,84 @@ class KinesisStream:
 
 # snippet-end:[python.example_code.kinesis.GetRecords]
 
+import time
+import signal
+import sys
+from datetime import timezone
+
+TICKERS = ["EKS", "S3", "EC2"]
+RECORDS_PER_SECOND = 10
+PARTITION_COUNT = 10
+
+def generate_record():
+    """Generate a single record with realistic timestamp"""
+    now = datetime.now(timezone.utc)
+    return {
+        "metadata": {
+            "product": {
+                "name": random.choice(TICKERS)
+            }
+        },
+        "message": "ResponseComplete",
+        "time": int(now.timestamp() * 1000),
+        "severity": "Informational",
+        "activity_name": "Update",
+        "@timestamp": now.isoformat()
+    }
+
+def signal_handler(sig, frame):
+    """Handle graceful shutdown"""
+    print("\nShutting down gracefully...")
+    sys.exit(0)
+
+def main():
+    """Main producer function"""
+    # Setup signal handler
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    # Validate environment variables
+    stream_name = os.getenv("KDS_NAME")
+    if not stream_name:
+        raise ValueError("KDS_NAME environment variable is required")
+    
+    region = os.getenv("AWS_REGION", "us-east-1")
+    
+    try:
+        # Create Kinesis client and stream
+        kinesis_client = boto3.client("kinesis", region_name=region)
+        stream = KinesisStream(kinesis_client)
+        stream.describe(stream_name)
+        
+        print(f"Connected to Kinesis stream: {stream_name}")
+        print(f"Sending {RECORDS_PER_SECOND} records/second (Ctrl+C to stop)")
+        
+        counter = 0
+        while True:
+            try:
+                # Generate and send record
+                data = generate_record()
+                partition_key = f"partition_key_{counter % PARTITION_COUNT}"
+                
+                stream.put_record(data, partition_key)
+                counter += 1
+                
+                # Rate limiting
+                time.sleep(1.0 / RECORDS_PER_SECOND)
+                
+                # Progress indicator
+                if counter % 100 == 0:
+                    print(f"Sent {counter} records")
+                    
+            except ClientError as e:
+                print(f"Kinesis error: {e}")
+                time.sleep(1)
+            except Exception as e:
+                print(f"Unexpected error: {e}")
+                time.sleep(1)
+                
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
 if __name__ == "__main__":
-    kinesis_client = boto3.client("kinesis",region_name="us-east-1")
-    stream = KinesisStream(kinesis_client)
-    stream.describe(os.getenv("KDS_NAME"))
-
-    counter = 0
-    while True:
-        # 取得現在時間
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        tickers = ["EKS", "S3", "EC2"]
-        # 產生隨機數據
-        data = {
-            "metadata": {
-                "product": {
-                    "name": random.choice(tickers)
-                }
-            },
-            "message": "ResponseComplete",
-            "time": 1750662612577,
-            "severity": "Informational",
-            "activity_name": "Update",
-            "@timestamp": "2025-06-23T07:10:12.577Z"
-        }
-
-
-        # 傳送到Kinesis
-        stream.put_record(data, f"partition_key_{counter % 10}")
-
-        counter += 1
+    main()
