@@ -10,7 +10,7 @@ OPENSEARCH_PWD = "your-password"
 OPENSEARCH_INDEX = "your-index-name"
 
 
-MSK_BS_IAM = ["your-msk-bootstrap-server:9098"]
+MSK_BS_IAM = "your-msk-bootstrap-server:9098"
 MSK_TOPIC = "your-msk-topic"
 
 
